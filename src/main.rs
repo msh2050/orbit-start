@@ -1397,6 +1397,9 @@ fn real_main() -> Result<()> {
                 Some("settings") => {
                     with(|s| s.app.view = ui::View::Settings);
                 }
+                Some("clocks") => {
+                    with(|s| s.app.view = ui::View::Clocks);
+                }
                 _ => {}
             }
             if let Some(q) = value("--query") {

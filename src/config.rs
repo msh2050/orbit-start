@@ -125,6 +125,93 @@ pub struct Workspace {
     pub apps: Vec<String>,
 }
 
+pub const MAX_CLOCKS: usize = 5;
+
+/// Cities offered when adding a world clock: (city, country, Windows time zone id).
+/// An empty id means the PC's own time zone.
+pub const CITIES: [(&str, &str, &str); 80] = [
+    ("Local", "This PC", ""),
+    ("Baghdad", "Iraq", "Arabic Standard Time"),
+    ("Erbil", "Iraq", "Arabic Standard Time"),
+    ("Basra", "Iraq", "Arabic Standard Time"),
+    ("Riyadh", "Saudi Arabia", "Arab Standard Time"),
+    ("Mecca", "Saudi Arabia", "Arab Standard Time"),
+    ("Kuwait City", "Kuwait", "Arab Standard Time"),
+    ("Doha", "Qatar", "Arab Standard Time"),
+    ("Manama", "Bahrain", "Arab Standard Time"),
+    ("Dubai", "United Arab Emirates", "Arabian Standard Time"),
+    ("Abu Dhabi", "United Arab Emirates", "Arabian Standard Time"),
+    ("Muscat", "Oman", "Arabian Standard Time"),
+    ("Amman", "Jordan", "Jordan Standard Time"),
+    ("Damascus", "Syria", "Syria Standard Time"),
+    ("Beirut", "Lebanon", "Middle East Standard Time"),
+    ("Jerusalem", "", "Israel Standard Time"),
+    ("Cairo", "Egypt", "Egypt Standard Time"),
+    ("Khartoum", "Sudan", "Sudan Standard Time"),
+    ("Tripoli", "Libya", "Libya Standard Time"),
+    ("Tunis", "Tunisia", "W. Central Africa Standard Time"),
+    ("Algiers", "Algeria", "W. Central Africa Standard Time"),
+    ("Casablanca", "Morocco", "Morocco Standard Time"),
+    ("Tehran", "Iran", "Iran Standard Time"),
+    ("Istanbul", "Turkey", "Turkey Standard Time"),
+    ("Ankara", "Turkey", "Turkey Standard Time"),
+    ("Toronto", "Canada", "Eastern Standard Time"),
+    ("Ottawa", "Canada", "Eastern Standard Time"),
+    ("Montreal", "Canada", "Eastern Standard Time"),
+    ("Vancouver", "Canada", "Pacific Standard Time"),
+    ("Calgary", "Canada", "Mountain Standard Time"),
+    ("Edmonton", "Canada", "Mountain Standard Time"),
+    ("Winnipeg", "Canada", "Central Standard Time"),
+    ("Regina", "Canada", "Canada Central Standard Time"),
+    ("Halifax", "Canada", "Atlantic Standard Time"),
+    ("St. John's", "Canada", "Newfoundland Standard Time"),
+    ("New York", "United States", "Eastern Standard Time"),
+    ("Washington", "United States", "Eastern Standard Time"),
+    ("Chicago", "United States", "Central Standard Time"),
+    ("Houston", "United States", "Central Standard Time"),
+    ("Denver", "United States", "Mountain Standard Time"),
+    ("Phoenix", "United States", "US Mountain Standard Time"),
+    ("Los Angeles", "United States", "Pacific Standard Time"),
+    ("San Francisco", "United States", "Pacific Standard Time"),
+    ("Anchorage", "United States", "Alaskan Standard Time"),
+    ("Honolulu", "United States", "Hawaiian Standard Time"),
+    ("Mexico City", "Mexico", "Central Standard Time (Mexico)"),
+    ("Bogotá", "Colombia", "SA Pacific Standard Time"),
+    ("São Paulo", "Brazil", "E. South America Standard Time"),
+    ("Buenos Aires", "Argentina", "Argentina Standard Time"),
+    ("London", "United Kingdom", "GMT Standard Time"),
+    ("Dublin", "Ireland", "GMT Standard Time"),
+    ("Lisbon", "Portugal", "GMT Standard Time"),
+    ("Paris", "France", "Romance Standard Time"),
+    ("Madrid", "Spain", "Romance Standard Time"),
+    ("Brussels", "Belgium", "Romance Standard Time"),
+    ("Berlin", "Germany", "W. Europe Standard Time"),
+    ("Amsterdam", "Netherlands", "W. Europe Standard Time"),
+    ("Rome", "Italy", "W. Europe Standard Time"),
+    ("Stockholm", "Sweden", "W. Europe Standard Time"),
+    ("Vienna", "Austria", "W. Europe Standard Time"),
+    ("Athens", "Greece", "GTB Standard Time"),
+    ("Kyiv", "Ukraine", "FLE Standard Time"),
+    ("Moscow", "Russia", "Russian Standard Time"),
+    ("Lagos", "Nigeria", "W. Central Africa Standard Time"),
+    ("Nairobi", "Kenya", "E. Africa Standard Time"),
+    ("Johannesburg", "South Africa", "South Africa Standard Time"),
+    ("Karachi", "Pakistan", "Pakistan Standard Time"),
+    ("Kabul", "Afghanistan", "Afghanistan Standard Time"),
+    ("New Delhi", "India", "India Standard Time"),
+    ("Mumbai", "India", "India Standard Time"),
+    ("Dhaka", "Bangladesh", "Bangladesh Standard Time"),
+    ("Bangkok", "Thailand", "SE Asia Standard Time"),
+    ("Jakarta", "Indonesia", "SE Asia Standard Time"),
+    ("Kuala Lumpur", "Malaysia", "Singapore Standard Time"),
+    ("Singapore", "Singapore", "Singapore Standard Time"),
+    ("Beijing", "China", "China Standard Time"),
+    ("Seoul", "South Korea", "Korea Standard Time"),
+    ("Tokyo", "Japan", "Tokyo Standard Time"),
+    ("Sydney", "Australia", "AUS Eastern Standard Time"),
+    ("Auckland", "New Zealand", "New Zealand Standard Time"),
+];
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct Config {
@@ -312,7 +399,7 @@ impl Config {
             self.pages = Config::default().pages;
         }
         self.gauges.truncate(5);
-        self.world_clocks.truncate(5);
+        self.world_clocks.truncate(MAX_CLOCKS);
     }
 
     pub fn layout(&self) -> Layout {
@@ -459,4 +546,19 @@ pub fn presets() -> Vec<(&'static str, Layout)> {
             make(Style::TwoPane, "wine", "#ff5fa2", 0.78, vec![vec![WorldClocks, Notes, Calculator], vec![Workspaces, Pinned]]),
         ),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn city_zones_exist() {
+        // Every zone in the city list must be a real Windows time zone.
+        for (city, _, tz) in CITIES {
+            if !tz.is_empty() {
+                assert!(crate::sysinfo::find_tz(tz).is_some(), "{city}: unknown time zone {tz}");
+            }
+        }
+    }
 }

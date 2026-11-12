@@ -42,7 +42,7 @@ no UI framework, so it stays small: about **35 MB of memory while closed**
 ### Widgets
 | | |
 | --- | --- |
-| Clock and date | Analogue **world clocks** |
+| Clock and date | Analogue **world clocks**: click them to pick from 80 cities |
 | **CPU, memory, GPU, network** gauges | **Drives**: one bar per drive; hover for used / total, click to open |
 | Month **calendar** | **Notes** (saved automatically) |
 | **Calculator** | **Run** box with history (↑ / ↓) |
@@ -135,7 +135,6 @@ Everything in the Customize screen is saved to
 | Key | Meaning |
 | --- | --- |
 | `news_url`, `news_title` | Any RSS or Atom feed |
-| `world_clocks` | Label and Windows time zone id, e.g. `"Tokyo Standard Time"` |
 | `gauges` | Any of `cpu`, `mem`, `gpu`, `net`, `disk` |
 | `web_search` | Search address; `{}` is replaced by the query |
 | `renderer` | `software` (default, lowest memory) or `gpu` |
@@ -226,6 +225,7 @@ Stardock; Start11 was an inspiration for the feature set.
   العمليات الحسابية، وتشغيل أوامر بكتابة `>`.
 - **شريط المهام**: تفتح من زر ويندوز و Ctrl+Esc وزر ابدأ، شكل مستدير أو جزر،
   وجزر صغيرة تعرض سرعة التنزيل والرفع والمعالج والذاكرة وأزرار المجلدات.
+- **الساعات العالمية**: اضغط على الساعات لاختيار المدن (80 مدينة منها كندا والدول العربية)، أو من Customize ← World clocks.
 - استهلاك منخفض: نحو 35 ميغابايت وهي مغلقة، وبدون أي استهلاك للمعالج.
 - خصوصية: لا تتبع ولا حساب. البيانات تبقى في `%USERPROFILE%\.orbit-start`.
 

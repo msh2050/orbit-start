@@ -188,6 +188,11 @@ pub enum Act {
     GroupDelete(usize),
     PickToggle(String),
     FocusGroupName,
+    EditClocks,
+    ClockAdd(usize),
+    ClockDel(usize),
+    ClockUp(usize),
+    ClockDown(usize),
 }
 
 /// Work that must run outside the UI state borrow (window changes, menus,
@@ -219,6 +224,8 @@ pub enum View {
     Settings,
     /// Choosing which apps belong to the custom group with this index.
     PickApps(usize),
+    /// Choosing which cities the world clocks show.
+    Clocks,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -1085,6 +1092,12 @@ impl App {
                 Focus::GroupName => self.focus = Focus::Search,
                 // While choosing apps, the search box only filters the list.
                 Focus::Search if matches!(self.view, View::PickApps(_)) => {}
+                // In the clock editor, Enter adds the first matching city.
+                Focus::Search if self.view == View::Clocks => {
+                    if let Some(i) = self.city_matches().first().copied() {
+                        self.perform(Act::ClockAdd(i));
+                    }
+                }
                 Focus::Search => {
                     if let Some(r) = self.results.get(self.sel) {
                         let act = r.act.clone();
@@ -1222,6 +1235,43 @@ impl App {
                 }
             }
             Act::FocusGroupName => self.focus = Focus::GroupName,
+            Act::EditClocks => {
+                self.search.clear();
+                self.results.clear();
+                self.focus = Focus::Search;
+                self.view = View::Clocks;
+                self.scroll = 0.0;
+            }
+            Act::ClockAdd(i) => {
+                if let Some((city, _, tz)) = CITIES.get(i) {
+                    if self.cfg.world_clocks.len() < MAX_CLOCKS
+                        && !self.cfg.world_clocks.iter().any(|c| c.label == *city && c.tz == *tz)
+                    {
+                        self.cfg.world_clocks.push(WorldClock { label: city.to_string(), tz: tz.to_string() });
+                        self.dirty = true;
+                    }
+                    self.search.clear();
+                    self.results.clear();
+                }
+            }
+            Act::ClockDel(i) => {
+                if i < self.cfg.world_clocks.len() {
+                    self.cfg.world_clocks.remove(i);
+                    self.dirty = true;
+                }
+            }
+            Act::ClockUp(i) => {
+                if i > 0 && i < self.cfg.world_clocks.len() {
+                    self.cfg.world_clocks.swap(i, i - 1);
+                    self.dirty = true;
+                }
+            }
+            Act::ClockDown(i) => {
+                if i + 1 < self.cfg.world_clocks.len() {
+                    self.cfg.world_clocks.swap(i, i + 1);
+                    self.dirty = true;
+                }
+            }
             Act::GroupTab(i) => self.group_tab = i,
             Act::FocusRun => self.focus = Focus::Run,
             Act::Web(q) => {
@@ -1642,6 +1692,8 @@ impl App {
         self.clip = Some(content);
         let total = if let View::PickApps(i) = self.view {
             self.draw_picker(g, content, i)
+        } else if self.view == View::Clocks {
+            self.draw_clock_editor(g, content)
         } else if !self.search.is_empty() {
             self.draw_results(g, content)
         } else {
@@ -1649,7 +1701,7 @@ impl App {
                 View::Home => self.draw_page(g, content),
                 View::AllApps => self.draw_all_apps(g, content),
                 View::Settings => self.draw_settings(g, content),
-                View::PickApps(_) => 0.0,
+                View::PickApps(_) | View::Clocks => 0.0,
             }
         };
         self.clip = None;
@@ -1848,6 +1900,8 @@ impl App {
                         t.dim,
                     );
                 }
+                // Click the clocks to choose other cities.
+                self.hit(Rect::new(x, y, width, 2.0 * r + 48.0), Act::EditClocks);
                 2.0 * r + 48.0
             }
             Widget::Calendar => {
@@ -2250,6 +2304,93 @@ impl App {
         y
     }
 
+    /// Cities whose name or country contains the search text, as indexes into CITIES.
+    fn city_matches(&self) -> Vec<usize> {
+        let q = self.search.text.trim().to_lowercase();
+        CITIES
+            .iter()
+            .enumerate()
+            .filter(|(_, (city, country, _))| {
+                q.is_empty() || city.to_lowercase().contains(&q) || country.to_lowercase().contains(&q)
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Time zone for a Windows zone id, looked up once and cached.
+    fn zone(&mut self, id: &str) -> Option<DYNAMIC_TIME_ZONE_INFORMATION> {
+        *self.tz.entry(id.to_string()).or_insert_with(|| sysinfo::find_tz(id))
+    }
+
+    /// World clocks editor: the chosen cities on top, all cities below.
+    fn draw_clock_editor(&mut self, g: &mut Gfx, c: Rect) -> f32 {
+        let t = self.theme;
+        let clocks = self.cfg.world_clocks.clone();
+        let n = clocks.len();
+        let head = self.back_header(g, c, "World clocks", &format!("{n} of {MAX_CLOCKS}"));
+        let mut y = c.y + head - self.scroll;
+        let time_txt = |app: &mut App, id: &str| {
+            let tz = app.zone(id);
+            let now = sysinfo::time_in(&tz);
+            let (hm, ampm) = sysinfo::format_time(&now, app.cfg.clock_24h);
+            (format!("{hm} {ampm}").trim().to_string(), sysinfo::fmt_offset(sysinfo::utc_offset_min(&tz)))
+        };
+        if clocks.is_empty() {
+            g.text("No clocks yet. Pick a city below.", Rect::new(c.x, y, c.w, 36.0), ts(13.5), t.dim);
+            y += 40.0;
+        }
+        for (i, clock) in clocks.iter().enumerate() {
+            let r = Rect::new(c.x, y, c.w - 6.0, 44.0);
+            g.fill_rr(r, 8.0, t.card.a(0.07));
+            let (time, off) = time_txt(self, &clock.tz);
+            g.text(&clock.label, Rect::new(r.x + 14.0, r.y, r.w * 0.38, r.h), ts(14.5).semi(), t.fg);
+            g.text(&time, Rect::new(r.x + r.w * 0.40, r.y, 110.0, r.h), ts(13.5).mono(), t.fg);
+            g.text(&off, Rect::new(r.x + r.w * 0.40 + 112.0, r.y, 100.0, r.h), ts(12.5), t.dim);
+            self.mini(g, r.right() - 104.0, r.y + 7.0, G_UP, Act::ClockUp(i), i > 0);
+            self.mini(g, r.right() - 72.0, r.y + 7.0, G_DOWN, Act::ClockDown(i), i + 1 < n);
+            self.mini(g, r.right() - 40.0, r.y + 7.0, G_CLOSE, Act::ClockDel(i), true);
+            y += 48.0;
+        }
+        y += 14.0;
+        g.text("Add a city", Rect::new(c.x, y, 200.0, 26.0), ts(15.0).semi(), t.fg);
+        let hint = if n >= MAX_CLOCKS {
+            format!("Remove a clock to add another (up to {MAX_CLOCKS})")
+        } else {
+            "Type in the search box to filter, Enter adds the first match".to_string()
+        };
+        g.text(&hint, Rect::new(c.x + 110.0, y, c.w - 116.0, 26.0), ts(12.5).right(), t.dim);
+        y += 32.0;
+        let full = n >= MAX_CLOCKS;
+        let list = self.city_matches();
+        if list.is_empty() {
+            g.text("No city matches. Try the country name.", Rect::new(c.x, y, c.w, 30.0), ts(13.5), t.dim);
+            y += 34.0;
+        }
+        for i in list {
+            if y + 40.0 >= c.y && y <= c.bottom() {
+                let (city, country, tz) = CITIES[i];
+                let added = clocks.iter().any(|k| k.label == city && k.tz == tz);
+                let r = Rect::new(c.x, y, c.w - 6.0, 40.0);
+                let hot = !full && !added && self.hit(r, Act::ClockAdd(i));
+                if hot {
+                    g.fill_rr(r, 8.0, t.card.a(0.10));
+                }
+                let (time, off) = time_txt(self, tz);
+                let col = if added || full { t.dim } else { t.fg };
+                g.text(city, Rect::new(r.x + 14.0, r.y, r.w * 0.30, r.h), ts(14.0), col);
+                g.text(country, Rect::new(r.x + r.w * 0.30, r.y, r.w * 0.30, r.h), ts(12.5), t.dim);
+                g.text(&time, Rect::new(r.x + r.w * 0.55, r.y, 110.0, r.h), ts(13.0).mono(), col);
+                g.text(&off, Rect::new(r.right() - 120.0, r.y, 76.0, r.h), ts(12.0), t.dim);
+                let mark = if added { "\u{E73E}" } else { G_ADD };
+                if added || hot {
+                    g.text(mark, Rect::new(r.right() - 40.0, r.y, 30.0, r.h), ts(12.0).icon().center(), if added { t.accent } else { t.fg });
+                }
+            }
+            y += 42.0;
+        }
+        y + self.scroll - c.y
+    }
+
     /// App chooser for a custom group: tick apps in or out, rename, delete.
     fn draw_picker(&mut self, g: &mut Gfx, c: Rect, wi: usize) -> f32 {
         let t = self.theme;
@@ -2497,6 +2638,12 @@ impl App {
             g.text(&txt, Rect::new(track.right() + 16.0, y, 60.0, 36.0), ts(13.0), t.dim);
             y += row;
         }
+
+        lab(g, "World clocks", y);
+        let names: Vec<String> = self.cfg.world_clocks.iter().map(|c| c.label.clone()).collect();
+        let nx = self.pills(g, cx, y, vec![("Change cities…", Act::EditClocks, false)]);
+        g.text(&names.join(", "), Rect::new(nx + 6.0, y, c.right() - nx - 6.0, 36.0), ts(12.5), t.dim);
+        y += row;
 
         lab(g, "Icon size", y);
         let ic = self.cfg.icon_size as u32;

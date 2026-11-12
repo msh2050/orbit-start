@@ -247,6 +247,25 @@ pub fn find_tz(name: &str) -> Option<DYNAMIC_TIME_ZONE_INFORMATION> {
     }
 }
 
+/// Minutes between the time in `tz` and UTC right now (DST included).
+pub fn utc_offset_min(tz: &Option<DYNAMIC_TIME_ZONE_INFORMATION>) -> i64 {
+    let utc = unsafe { GetSystemTime() };
+    let local = time_in(tz);
+    let m = |t: &SYSTEMTIME| {
+        days_from_civil(t.wYear as i64, t.wMonth as i64, t.wDay as i64) * 1440 + t.wHour as i64 * 60 + t.wMinute as i64
+    };
+    m(&local) - m(&utc)
+}
+
+pub fn fmt_offset(m: i64) -> String {
+    let sign = if m < 0 { '−' } else { '+' };
+    if m % 60 == 0 {
+        format!("UTC{sign}{}", m.abs() / 60)
+    } else {
+        format!("UTC{sign}{}:{:02}", m.abs() / 60, m.abs() % 60)
+    }
+}
+
 pub fn time_in(tz: &Option<DYNAMIC_TIME_ZONE_INFORMATION>) -> SYSTEMTIME {
     unsafe {
         match tz {
