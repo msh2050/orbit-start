@@ -72,7 +72,8 @@ no UI framework, so it stays small: about **35 MB of memory while closed**
 - **Rounded** or **Islands** taskbar shape. Switching back, or quitting, restores
   the normal taskbar; if the app is killed, the next launch restores it.
 - **Taskbar islands** in the free space on the left: download / upload speed,
-  CPU and memory (click for Task Manager) and quick buttons for Downloads,
+  CPU, GPU and memory with icons, mini graphs of the last minute and CPU / GPU
+  temperatures (click for Task Manager), plus quick buttons for Downloads,
   Documents and your user folder. They hide during full-screen apps.
 
 ## Screenshots
@@ -147,11 +148,19 @@ Windows launched it at sign-in.
 - **GPU temperature** and **VRAM** come from Windows itself (the same data
   Task Manager shows), for NVIDIA, AMD and Intel cards with a recent driver.
 - **CPU temperature** has no reliable source in Windows: the built-in ACPI
-  value is usually a fixed number, and reading the real sensor needs a kernel
-  driver. Orbit Start does not install one. Instead, if the free, open-source
-  [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)
-  is running (as administrator), Orbit Start reads the CPU package temperature
-  from it automatically.
+  value is usually a fixed number, and the real sensor can only be read by an
+  administrator through a driver. The optional **sensor helper** in
+  [`sensors-helper/`](sensors-helper) does this with
+  [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)'s
+  library and the signed [PawnIO](https://pawnio.eu) driver, with no window:
+  1. Install PawnIO, and put LibreHardwareMonitor 0.9.6 (.NET Framework build)
+     in `C:\Tools\LibreHardwareMonitor`.
+  2. Run `sensors-helperuild.ps1`, then double-click
+     `sensors-helper\install-sensors.cmd` and accept the administrator prompt.
+     It installs to `C:\Program Files\OrbitStart\Sensors` and starts at
+     sign-in through a scheduled task. `install-sensors.cmd -Uninstall` removes it.
+
+  If LibreHardwareMonitor's own app is running instead, its readings are used.
 
 ## Privacy
 

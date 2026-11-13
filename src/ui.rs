@@ -304,6 +304,8 @@ pub struct App {
     pub demo: bool,
     /// The menu is on screen.
     open: bool,
+    /// The taskbar island is on screen (it needs temperatures and GPU load too).
+    pub island_on: bool,
     /// Last minute of each stat (0..1), oldest first, for the graphs.
     hist: HashMap<&'static str, VecDeque<f32>>,
     pub pending: Vec<Pending>,
@@ -400,6 +402,7 @@ impl App {
             user: sysinfo::user_name(),
             demo: false,
             open: false,
+            island_on: false,
             hist: HashMap::new(),
             avatar: None,
             pending: Vec::new(),
@@ -640,6 +643,11 @@ impl App {
         self.cfg.pages.iter().any(|p| p.widgets.contains(&w))
     }
 
+    /// Last minute of a stat (0..1), oldest first.
+    pub fn history(&self, key: &str) -> Vec<f32> {
+        self.hist.get(key).map(|q| q.iter().copied().collect()).unwrap_or_default()
+    }
+
     pub fn stats(&self) -> Stats {
         self.stats
     }
@@ -649,7 +657,8 @@ impl App {
     }
 
     fn wants_gpu(&self) -> bool {
-        self.has_widget(Widget::Gauges) && self.cfg.gauges.iter().any(|g| g == "gpu" || g == "vram")
+        self.island_on
+            || self.has_widget(Widget::Gauges) && self.cfg.gauges.iter().any(|g| g == "gpu" || g == "vram")
     }
 
     pub fn on_show(&mut self) {
@@ -721,7 +730,7 @@ impl App {
     pub fn tick(&mut self) {
         let gpu = self.wants_gpu();
         let net = self.wants_net();
-        let extra = self.open && self.has_widget(Widget::Gauges);
+        let extra = (self.open && self.has_widget(Widget::Gauges)) || self.island_on;
         self.stats = self.sampler.sample(gpu, net, extra);
         self.record();
     }

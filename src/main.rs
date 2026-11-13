@@ -54,7 +54,7 @@ const WM_CLICKAWAY: u32 = WM_APP + 7;
 const CLASS: PCWSTR = w!("OrbitStartMenu");
 const ISLAND_CLASS: PCWSTR = w!("OrbitStartIsland");
 /// Island layout, in layout units: stats pill, gap, folder pill.
-const ISL_STATS_W: f32 = 300.0;
+const ISL_STATS_W: f32 = 452.0;
 const ISL_GAP: f32 = 8.0;
 const ISL_BTN: f32 = 40.0;
 const ISL_FOLDERS: [(&str, &str); 3] = [("\u{E896}", "shell:Downloads"), ("\u{E8A5}", "shell:Personal"), ("\u{E8B7}", "shell:Profile")];
@@ -849,6 +849,82 @@ unsafe fn demo_wallpaper(gfx: &Gfx, hinst: HINSTANCE) {
 
 // ----------------------------------------------------------------- island
 
+/// Small vector icons for the island, drawn in a 16 x 16 box.
+fn island_icon(g: &mut Gfx, kind: &str, x: f32, y: f32, c: Color) {
+    use gfx::Rect;
+    match kind {
+        // Processor: a chip with pins on every side.
+        "cpu" => {
+            g.stroke_rr(Rect::new(x + 3.0, y + 3.0, 10.0, 10.0), 2.0, c, 1.4);
+            g.fill_rr(Rect::new(x + 6.0, y + 6.0, 4.0, 4.0), 1.0, c);
+            for k in [6.0, 10.0] {
+                g.line(x + k, y + 0.5, x + k, y + 2.5, c, 1.2);
+                g.line(x + k, y + 13.5, x + k, y + 15.5, c, 1.2);
+                g.line(x + 0.5, y + k, x + 2.5, y + k, c, 1.2);
+                g.line(x + 13.5, y + k, x + 15.5, y + k, c, 1.2);
+            }
+        }
+        // Graphics card: a board with a fan.
+        "gpu" => {
+            g.stroke_rr(Rect::new(x + 0.5, y + 3.5, 15.0, 9.0), 2.0, c, 1.4);
+            g.stroke_circle(x + 6.0, y + 8.0, 2.6, c, 1.3);
+            g.line(x + 10.5, y + 6.5, x + 13.0, y + 6.5, c, 1.2);
+            g.line(x + 10.5, y + 9.5, x + 13.0, y + 9.5, c, 1.2);
+            g.line(x + 2.5, y + 12.5, x + 2.5, y + 15.0, c, 1.2);
+        }
+        // Memory: a module with chips and contact teeth.
+        "mem" => {
+            g.stroke_rr(Rect::new(x + 0.5, y + 4.0, 15.0, 7.5), 1.5, c, 1.4);
+            for k in 0..3 {
+                g.fill_rr(Rect::new(x + 2.6 + k as f32 * 3.9, y + 6.2, 2.6, 3.2), 0.6, c);
+            }
+            for k in 0..4 {
+                let lx = x + 2.5 + k as f32 * 3.6;
+                g.line(lx, y + 12.0, lx, y + 14.5, c, 1.1);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Arrow pointing down (`down`) or up, 10 units tall.
+fn island_arrow(g: &mut Gfx, x: f32, y: f32, down: bool, c: Color) {
+    let (top, bottom) = (y, y + 10.0);
+    g.line(x + 4.0, top, x + 4.0, bottom, c, 1.6);
+    if down {
+        g.polyline(&[(x + 0.5, bottom - 3.5), (x + 4.0, bottom), (x + 7.5, bottom - 3.5)], c, 1.6);
+    } else {
+        g.polyline(&[(x + 0.5, top + 3.5), (x + 4.0, top), (x + 7.5, top + 3.5)], c, 1.6);
+    }
+}
+
+/// Mini area graph of the last minute.
+fn island_spark(g: &mut Gfx, data: &[f32], r: gfx::Rect, c: Color) {
+    g.line(r.x, r.bottom(), r.right(), r.bottom(), c.a(0.25), 1.0);
+    if data.len() < 2 {
+        return;
+    }
+    let step = r.w / 59.0;
+    let x0 = r.right() - (data.len() - 1) as f32 * step;
+    let pts: Vec<(f32, f32)> =
+        data.iter().enumerate().map(|(k, v)| (x0 + k as f32 * step, r.bottom() - v.clamp(0.0, 1.0) * r.h)).collect();
+    let mut area = pts.clone();
+    area.push((r.right(), r.bottom()));
+    area.push((x0, r.bottom()));
+    g.fill_poly(&area, c.a(0.25));
+    g.polyline(&pts, c, 1.3);
+}
+
+fn temp_color(t: f32, normal: Color) -> Color {
+    if t >= 85.0 {
+        Color::rgb(0xff6b5b)
+    } else if t >= 70.0 {
+        Color::rgb(0xf2c14e)
+    } else {
+        normal
+    }
+}
+
 fn draw_island(g: &mut Gfx, app: &App, h: f32) {
     use gfx::{ts, Rect};
     let t = app.theme;
@@ -858,22 +934,62 @@ fn draw_island(g: &mut Gfx, app: &App, h: f32) {
         g.fill_rr(r, 12.0, t.bg.a(0.93));
         g.stroke_rr(r, 12.0, t.card.a(0.12), 1.0);
     };
-    let stats = Rect::new(0.0, 0.0, ISL_STATS_W, h);
-    pill(g, stats);
+    pill(g, Rect::new(0.0, 0.0, ISL_STATS_W, h));
+    let row1 = Rect::new(0.0, h / 2.0 - 15.0, 0.0, 15.0);
+    let row2 = Rect::new(0.0, h / 2.0 + 1.0, 0.0, 14.0);
+    let divider = |g: &mut Gfx, x: f32| g.fill_rect(Rect::new(x, h * 0.24, 1.0, h * 0.52), t.card.a(0.14));
+    let spark_r = |x: f32| Rect::new(x, h / 2.0 - 9.0, 40.0, 18.0);
+
+    // Network: arrows, both speeds, and a graph of downloads.
+    let (down_c, up_c) = (Color::rgb(0xa78bfa), Color::rgb(0x4fd1c5));
     let rate = |v: Option<f32>| v.map(|v| format!("{}/s", sysinfo::fmt_rate(v))).unwrap_or_else(|| "–".into());
-    let mut x = 14.0;
-    for (arrow, col, val) in [("↓", Color::rgb(0xa78bfa), rate(st.net_down)), ("↑", Color::rgb(0x4fd1c5), rate(st.net_up))] {
-        g.text(arrow, Rect::new(x, 0.0, 14.0, h), ts(14.0).bold().center(), col);
-        g.text(&val, Rect::new(x + 16.0, 0.0, 54.0, h), ts(12.5).semi(), t.fg);
-        x += 72.0;
-    }
-    g.fill_rect(Rect::new(x, h * 0.28, 1.0, h * 0.44), t.card.a(0.16));
+    let mut x = 12.0;
+    island_arrow(g, x, row1.y + 2.5, true, down_c);
+    island_arrow(g, x, row2.y + 2.0, false, up_c);
+    g.text(&rate(st.net_down), Rect::new(x + 12.0, row1.y, 56.0, row1.h), ts(12.0).semi(), t.fg);
+    g.text(&rate(st.net_up), Rect::new(x + 12.0, row2.y, 56.0, row2.h), ts(11.5), t.dim);
+    island_spark(g, &app.history("net"), spark_r(x + 70.0), down_c);
+    x += 118.0;
+    divider(g, x);
     x += 10.0;
-    for (label, val) in [("CPU", st.cpu), ("MEM", st.mem)] {
-        g.text(label, Rect::new(x, 0.0, 30.0, h), ts(10.5).bold(), t.dim);
-        g.text(&format!("{:.0}%", val * 100.0), Rect::new(x + 31.0, 0.0, 38.0, h), ts(12.5).semi(), t.fg);
-        x += 68.0;
+
+    // CPU, GPU, memory: icon, graph, value, and temperature (or size) below it.
+    let gb = |v: f32| if v >= 10.0 { format!("{v:.0} GB") } else { format!("{v:.1} GB") };
+    let items: [(&str, Option<f32>, Option<String>, Color, Color); 3] = [
+        (
+            "cpu",
+            Some(st.cpu),
+            st.cpu_temp.map(|c| format!("{c:.0}°")),
+            Color::rgb(0x4ea8ff),
+            st.cpu_temp.map(|c| temp_color(c, t.dim)).unwrap_or(t.dim),
+        ),
+        (
+            "gpu",
+            st.gpu,
+            st.gpu_temp.map(|c| format!("{c:.0}°")),
+            Color::rgb(0x34c38f),
+            st.gpu_temp.map(|c| temp_color(c, t.dim)).unwrap_or(t.dim),
+        ),
+        ("mem", Some(st.mem), Some(gb(st.mem_used_gb)), Color::rgb(0xff7eb6), t.dim),
+    ];
+    for (i, (key, val, sub, col, sub_col)) in items.into_iter().enumerate() {
+        island_icon(g, key, x, h / 2.0 - 8.0, col);
+        island_spark(g, &app.history(key), spark_r(x + 22.0), col);
+        let tx = x + 68.0;
+        let v = val.map(|v| format!("{:.0}%", v * 100.0)).unwrap_or_else(|| "–".into());
+        match sub {
+            Some(sub) => {
+                g.text(&v, Rect::new(tx, row1.y, 42.0, row1.h), ts(12.0).semi(), t.fg);
+                g.text(&sub, Rect::new(tx, row2.y, 46.0, row2.h), ts(11.0), sub_col);
+            }
+            None => g.text(&v, Rect::new(tx, 0.0, 42.0, h), ts(12.0).semi(), t.fg),
+        }
+        x += 106.0;
+        if i < 2 {
+            divider(g, x - 8.0);
+        }
     }
+
     let fx = ISL_STATS_W + ISL_GAP;
     pill(g, Rect::new(fx, 0.0, ISL_BTN * ISL_FOLDERS.len() as f32 + 12.0, h));
     for (i, (glyph, _)) in ISL_FOLDERS.iter().enumerate() {
@@ -902,9 +1018,11 @@ unsafe fn island_tick() {
         let x = tb.left + m + (6.0 * k) as i32;
         let fits = (x + w + (16.0 * k) as i32) < taskbar::leftmost() && h > 10 && IsWindowVisible(tray).as_bool();
         s.island_live = on && fits && !busy;
+        s.app.island_on = s.island_live;
         if !s.island_live {
             return Some((*ih, None));
         }
+        s.app.island_on = true;
         s.app.tick();
         ig.resize(w as u32, h as u32);
         ig.set_scale(k);

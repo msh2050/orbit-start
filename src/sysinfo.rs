@@ -195,10 +195,12 @@ impl Sampler {
             s.vram_used = g.vram_used().map(|b| b as f32 / 1073741824.0);
             s.gpu_temp = g.temperature();
         }
-        let (cpu, gpu) = self.lhm.read();
-        s.cpu_temp = cpu;
-        if s.gpu_temp.is_none() {
-            s.gpu_temp = gpu;
+        s.cpu_temp = crate::sensors::helper_cpu_temp();
+        if s.cpu_temp.is_none() || s.gpu_temp.is_none() {
+            // LibreHardwareMonitor's own app, if it happens to be running.
+            let (cpu, gpu) = self.lhm.read();
+            s.cpu_temp = s.cpu_temp.or(cpu);
+            s.gpu_temp = s.gpu_temp.or(gpu);
         }
     }
 

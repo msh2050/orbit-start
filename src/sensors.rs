@@ -208,3 +208,25 @@ impl Lhm {
         (cpu.or(cpu_any), gpu)
     }
 }
+
+/// CPU temperature written by the Orbit Start sensor helper
+/// (`%ProgramData%\\OrbitStart\\sensors.txt`), if it is fresh.
+pub fn helper_cpu_temp() -> Option<f32> {
+    let dir = std::env::var_os("ProgramData")?;
+    let text = std::fs::read_to_string(std::path::Path::new(&dir).join("OrbitStart").join("sensors.txt")).ok()?;
+    let mut cpu = None;
+    let mut time = 0i64;
+    for line in text.lines() {
+        if let Some(v) = line.strip_prefix("cpu=") {
+            cpu = v.trim().parse::<f32>().ok();
+        } else if let Some(v) = line.strip_prefix("time=") {
+            time = v.trim().parse().unwrap_or(0);
+        }
+    }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64;
+    // The helper writes every 2 seconds; older data means it has stopped.
+    if (now - time).abs() > 15 {
+        return None;
+    }
+    cpu.filter(|t| *t > 0.0 && *t < 125.0)
+}
