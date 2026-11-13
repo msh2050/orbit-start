@@ -51,6 +51,9 @@ const WM_NEWS_READY: u32 = WM_APP + 6;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const CF_UNICODETEXT: u32 = 13;
 const WM_CLICKAWAY: u32 = WM_APP + 7;
+const WM_STATS: u32 = WM_APP + 8;
+/// Timer that re-registers the keyboard and mouse hooks.
+const HOOK_TIMER: usize = 3;
 const CLASS: PCWSTR = w!("OrbitStartMenu");
 const ISLAND_CLASS: PCWSTR = w!("OrbitStartIsland");
 /// Island layout, in layout units: stats pill, gap, folder pill.
@@ -102,6 +105,65 @@ fn log(msg: &str) {
     }
 }
 static TASKBAR_TX: Mutex<Option<Sender<()>>> = Mutex::new(None);
+static KB_HOOK: AtomicIsize = AtomicIsize::new(0);
+static MS_HOOK: AtomicIsize = AtomicIsize::new(0);
+
+/// (Re)registers the low-level keyboard and mouse hooks. Windows silently
+/// drops a hook whose thread was too slow to answer, which would make the
+/// Windows key stop opening the menu, so this runs again every minute and
+/// after the PC wakes up.
+unsafe fn install_hooks() {
+    let hinst: HINSTANCE = GetModuleHandleW(None).map(|m| m.into()).unwrap_or_default();
+    for (slot, id, proc_) in [
+        (&KB_HOOK, WH_KEYBOARD_LL, kb_hook as unsafe extern "system" fn(i32, WPARAM, LPARAM) -> LRESULT),
+        (&MS_HOOK, WH_MOUSE_LL, mouse_hook as unsafe extern "system" fn(i32, WPARAM, LPARAM) -> LRESULT),
+    ] {
+        let new = SetWindowsHookExW(id, Some(proc_), Some(hinst), 0).ok();
+        let old = slot.swap(new.map(|h| h.0 as isize).unwrap_or(0), Ordering::Relaxed);
+        if old != 0 {
+            let _ = UnhookWindowsHookEx(HHOOK(old as *mut _));
+        }
+    }
+}
+
+unsafe fn remove_hooks() {
+    for slot in [&KB_HOOK, &MS_HOOK] {
+        let old = slot.swap(0, Ordering::Relaxed);
+        if old != 0 {
+            let _ = UnhookWindowsHookEx(HHOOK(old as *mut _));
+        }
+    }
+}
+
+/// Background thread that measures CPU, GPU, network, VRAM and temperatures
+/// and posts the results to the window, so slow sources never freeze the UI.
+fn stats_thread(rx: std::sync::mpsc::Receiver<()>) {
+    use std::sync::mpsc::RecvTimeoutError;
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+    }
+    let mut sampler = sysinfo::Sampler::new();
+    loop {
+        let want = sysinfo::WANT.load(Ordering::Relaxed);
+        if want & sysinfo::WANT_ACTIVE == 0 {
+            // Nothing on screen needs stats: sleep until woken.
+            if rx.recv().is_err() {
+                return;
+            }
+            continue;
+        }
+        let st = sampler.sample(
+            want & sysinfo::WANT_GPU != 0,
+            want & sysinfo::WANT_NET != 0,
+            want & sysinfo::WANT_EXTRA != 0,
+        );
+        post_box(WM_STATS, st);
+        match rx.recv_timeout(std::time::Duration::from_secs(1)) {
+            Err(RecvTimeoutError::Disconnected) => return,
+            _ => {}
+        }
+    }
+}
 
 /// Asks the taskbar thread to re-read button positions and re-apply the shape.
 fn ping_taskbar() {
@@ -1132,6 +1194,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
     }
     match msg {
         WM_SETTINGCHANGE | WM_DISPLAYCHANGE => ping_taskbar(),
+        WM_STATS => {
+            let st = Box::from_raw(lp.0 as *mut sysinfo::Stats);
+            with(|s| s.app.set_stats(*st));
+        }
+        WM_TIMER if wp.0 == HOOK_TIMER => install_hooks(),
+        WM_POWERBROADCAST => {
+            // Back from sleep: hooks and taskbar positions may be stale.
+            if wp.0 as u32 == PBT_APMRESUMEAUTOMATIC || wp.0 as u32 == PBT_APMRESUMESUSPEND {
+                install_hooks();
+                ping_taskbar();
+            }
+            return LRESULT(1);
+        }
         WM_TOGGLE => toggle(),
         WM_TRAY => match lp.0 as u32 {
             WM_LBUTTONUP => {
@@ -1489,8 +1564,12 @@ fn real_main() -> Result<()> {
         }
 
         tray(hwnd, true);
-        let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(kb_hook), Some(hinst), 0).ok();
-        let mhook = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), Some(hinst), 0).ok();
+        install_hooks();
+        SetTimer(Some(hwnd), HOOK_TIMER, 60_000, None);
+
+        let (stats_tx, stats_rx) = std::sync::mpsc::channel();
+        with(|s| s.app.stats_wake = Some(stats_tx));
+        std::thread::spawn(move || stats_thread(stats_rx));
 
         // Window open/close notifications (for "recently closed").
         SHELLHOOK.store(RegisterWindowMessageW(w!("SHELLHOOK")), Ordering::Relaxed);
@@ -1533,12 +1612,7 @@ fn real_main() -> Result<()> {
             DispatchMessageW(&msg);
         }
 
-        if let Some(h) = hook {
-            let _ = UnhookWindowsHookEx(h);
-        }
-        if let Some(h) = mhook {
-            let _ = UnhookWindowsHookEx(h);
-        }
+        remove_hooks();
         with(|s| {
             let _ = s.hwnd;
         });

@@ -38,6 +38,13 @@ pub struct Stats {
     pub gpu_temp: Option<f32>,
 }
 
+/// What the stats thread should measure, set by the UI (bit flags).
+pub static WANT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+pub const WANT_ACTIVE: u8 = 1;
+pub const WANT_GPU: u8 = 2;
+pub const WANT_NET: u8 = 4;
+pub const WANT_EXTRA: u8 = 8;
+
 #[derive(Clone)]
 pub struct Drive {
     /// Root path such as `C:\\`.

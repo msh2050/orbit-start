@@ -13,7 +13,7 @@ use crate::calc;
 use crate::config::*;
 use crate::gfx::*;
 use crate::news::{self, NewsItem};
-use crate::sysinfo::{self, Sampler, Stats};
+use crate::sysinfo::{self, Stats};
 use crate::text::TextField;
 use crate::wins::{self, Closed, Win};
 
@@ -294,7 +294,8 @@ pub struct App {
     clip: Option<Rect>,
     drag: Option<(SliderKind, Rect)>,
     stats: Stats,
-    sampler: Sampler,
+    /// Wakes the stats thread at once (it samples in the background).
+    pub stats_wake: Option<std::sync::mpsc::Sender<()>>,
     pub news: Vec<NewsItem>,
     pub news_at: Option<Instant>,
     pub news_loading: bool,
@@ -395,7 +396,7 @@ impl App {
             clip: None,
             drag: None,
             stats: Stats::default(),
-            sampler: Sampler::new(),
+            stats_wake: None,
             news: Vec::new(),
             news_at: None,
             news_loading: false,
@@ -673,11 +674,10 @@ impl App {
         self.drag = None;
         self.page = self.page.min(self.cfg.pages.len().saturating_sub(1));
         self.open = true;
-        let gpu = self.wants_gpu();
-        let net = self.wants_net();
-        let extra = self.has_widget(Widget::Gauges);
-        self.stats = self.sampler.sample(gpu, net, extra);
-        self.record();
+        self.tick();
+        if let Some(tx) = &self.stats_wake {
+            let _ = tx.send(());
+        }
         if self.demo {
             self.scroll2 = 0.0;
             if self.has_widget(Widget::News) && !self.news_loading && self.news_at.is_none() {
@@ -721,17 +721,42 @@ impl App {
 
     pub fn on_hide(&mut self) {
         self.open = false;
+        self.tick();
         if self.dirty {
             self.cfg.save();
             self.dirty = false;
         }
     }
 
+    /// Tells the stats thread what to measure. Sampling never runs on the UI
+    /// thread: some sources (GPU counters, the graphics driver, WMI) can stall
+    /// for seconds, for example right after the PC wakes from sleep.
     pub fn tick(&mut self) {
-        let gpu = self.wants_gpu();
-        let net = self.wants_net();
-        let extra = (self.open && self.has_widget(Widget::Gauges)) || self.island_on;
-        self.stats = self.sampler.sample(gpu, net, extra);
+        let active = self.open || self.island_on;
+        let mut want = 0u8;
+        if active {
+            want |= sysinfo::WANT_ACTIVE;
+            if self.wants_gpu() {
+                want |= sysinfo::WANT_GPU;
+            }
+            if self.wants_net() {
+                want |= sysinfo::WANT_NET;
+            }
+            if (self.open && self.has_widget(Widget::Gauges)) || self.island_on {
+                want |= sysinfo::WANT_EXTRA;
+            }
+        }
+        let before = sysinfo::WANT.swap(want, std::sync::atomic::Ordering::Relaxed);
+        if before & sysinfo::WANT_ACTIVE == 0 && active {
+            if let Some(tx) = &self.stats_wake {
+                let _ = tx.send(());
+            }
+        }
+    }
+
+    /// New measurements from the stats thread.
+    pub fn set_stats(&mut self, s: Stats) {
+        self.stats = s;
         self.record();
     }
 
