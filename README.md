@@ -157,12 +157,15 @@ Windows launched it at sign-in.
   [`sensors-helper/`](sensors-helper) does this with
   [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)'s
   library and the signed [PawnIO](https://pawnio.eu) driver, with no window:
-  1. Install PawnIO, and put LibreHardwareMonitor 0.9.6 (.NET Framework build)
-     in `C:\Tools\LibreHardwareMonitor`.
-  2. Run `sensors-helperuild.ps1`, then double-click
-     `sensors-helper\install-sensors.cmd` and accept the administrator prompt.
-     It installs to `C:\Program Files\OrbitStart\Sensors` and starts at
+  1. Install the [PawnIO](https://pawnio.eu) driver.
+  2. Download `orbit-sensors-*.zip` from the [latest release](../../releases/latest),
+     unzip it, double-click `install-sensors.cmd` and accept the administrator
+     prompt. It installs to `C:\Program Files\OrbitStart\Sensors` and starts at
      sign-in through a scheduled task. `install-sensors.cmd -Uninstall` removes it.
+
+  To build the helper yourself instead, put LibreHardwareMonitor 0.9.6 (.NET
+  Framework build) in `C:\Tools\LibreHardwareMonitor`, run
+  `sensors-helper\build.ps1`, then `sensors-helper\install-sensors.cmd`.
 
   If LibreHardwareMonitor's own app is running instead, its readings are used.
 
@@ -249,7 +252,7 @@ Stardock; Start11 was an inspiration for the feature set.
   العمليات الحسابية، وتشغيل أوامر بكتابة `>`.
 - **شريط المهام**: تفتح من زر ويندوز و Ctrl+Esc وزر ابدأ، شكل مستدير أو جزر،
   وجزر صغيرة تعرض سرعة التنزيل والرفع والمعالج والذاكرة وأزرار المجلدات.
-- **رسوم بيانية حية** للمعالج وكرت الشاشة والذاكرة و **ذاكرة كرت الشاشة (VRAM)** والشبكة، مع **حرارة كرت الشاشة**. حرارة المعالج تحتاج تشغيل برنامج LibreHardwareMonitor المجاني.
+- **رسوم بيانية حية** للمعالج وكرت الشاشة والذاكرة و **ذاكرة كرت الشاشة (VRAM)** والشبكة، مع **حرارة كرت الشاشة**. لحرارة المعالج: ثبّت تعريف [PawnIO](https://pawnio.eu)، ثم نزّل `orbit-sensors-*.zip` من صفحة الإصدارات وشغّل `install-sensors.cmd` مرة واحدة.
 - **الساعات العالمية**: اضغط على الساعات لاختيار المدن (80 مدينة منها كندا والدول العربية)، أو من Customize ← World clocks.
 - استهلاك منخفض: نحو 35 ميغابايت وهي مغلقة، وبدون أي استهلاك للمعالج.
 - خصوصية: لا تتبع ولا حساب. البيانات تبقى في `%USERPROFILE%\.orbit-start`.
