@@ -1,7 +1,7 @@
 //! Menu state, layout, drawing and input handling. Immediate mode: every
 //! frame draws the whole menu and records the clickable regions it produced.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::mpsc::Sender;
 use std::time::Instant;
 
@@ -68,6 +68,16 @@ const DEMO_APPS: [&str; 34] = [
 ];
 const DEMO_USAGE: [&str; 8] =
     ["Microsoft Edge", "Visual Studio Code", "Terminal", "File Explorer", "Outlook", "Word", "Photos", "Snipping Tool"];
+
+trait PairOr {
+    fn unwrap_or_default_pair(self, c: Color) -> (String, Color);
+}
+
+impl PairOr for Option<(String, Color)> {
+    fn unwrap_or_default_pair(self, c: Color) -> (String, Color) {
+        self.unwrap_or((String::new(), c))
+    }
+}
 
 /// UTF-16 range of the query inside a title, for highlighting.
 fn hl_of(title: &str, q: &str) -> (u32, u32) {
@@ -189,6 +199,7 @@ pub enum Act {
     PickToggle(String),
     FocusGroupName,
     EditClocks,
+    StatsStyle(bool),
     ClockAdd(usize),
     ClockDel(usize),
     ClockUp(usize),
@@ -291,6 +302,10 @@ pub struct App {
     pub avatar: Option<ID2D1Bitmap1>,
     /// Screenshot mode: made-up name, files, drives and windows; nothing from this PC.
     pub demo: bool,
+    /// The menu is on screen.
+    open: bool,
+    /// Last minute of each stat (0..1), oldest first, for the graphs.
+    hist: HashMap<&'static str, VecDeque<f32>>,
     pub pending: Vec<Pending>,
     autostart: bool,
     tz: HashMap<String, Option<DYNAMIC_TIME_ZONE_INFORMATION>>,
@@ -384,6 +399,8 @@ impl App {
             news_loading: false,
             user: sysinfo::user_name(),
             demo: false,
+            open: false,
+            hist: HashMap::new(),
             avatar: None,
             pending: Vec::new(),
             autostart: sysinfo::autostart_enabled(),
@@ -632,7 +649,7 @@ impl App {
     }
 
     fn wants_gpu(&self) -> bool {
-        self.has_widget(Widget::Gauges) && self.cfg.gauges.iter().any(|g| g == "gpu")
+        self.has_widget(Widget::Gauges) && self.cfg.gauges.iter().any(|g| g == "gpu" || g == "vram")
     }
 
     pub fn on_show(&mut self) {
@@ -646,9 +663,12 @@ impl App {
         self.hot = None;
         self.drag = None;
         self.page = self.page.min(self.cfg.pages.len().saturating_sub(1));
+        self.open = true;
         let gpu = self.wants_gpu();
         let net = self.wants_net();
-        self.stats = self.sampler.sample(gpu, net);
+        let extra = self.has_widget(Widget::Gauges);
+        self.stats = self.sampler.sample(gpu, net, extra);
+        self.record();
         if self.demo {
             self.scroll2 = 0.0;
             if self.has_widget(Widget::News) && !self.news_loading && self.news_at.is_none() {
@@ -691,6 +711,7 @@ impl App {
     }
 
     pub fn on_hide(&mut self) {
+        self.open = false;
         if self.dirty {
             self.cfg.save();
             self.dirty = false;
@@ -700,7 +721,32 @@ impl App {
     pub fn tick(&mut self) {
         let gpu = self.wants_gpu();
         let net = self.wants_net();
-        self.stats = self.sampler.sample(gpu, net);
+        let extra = self.open && self.has_widget(Widget::Gauges);
+        self.stats = self.sampler.sample(gpu, net, extra);
+        self.record();
+    }
+
+    /// Adds the current stats to the graph history.
+    fn record(&mut self) {
+        let s = self.stats;
+        let vram = s.vram_used.filter(|_| s.vram_total > 0.0).map(|u| u / s.vram_total);
+        let disk = Some(s.disk);
+        for (k, v) in [
+            ("cpu", Some(s.cpu)),
+            ("gpu", s.gpu),
+            ("mem", Some(s.mem)),
+            ("vram", vram),
+            ("net", s.net_down.map(|_| s.net_frac)),
+            ("disk", disk),
+        ] {
+            if let Some(v) = v {
+                let q = self.hist.entry(k).or_default();
+                q.push_back(v.clamp(0.0, 1.0));
+                while q.len() > 60 {
+                    q.pop_front();
+                }
+            }
+        }
     }
 
     pub fn set_apps(&mut self, mut apps: Vec<AppEntry>) {
@@ -1235,6 +1281,10 @@ impl App {
                 }
             }
             Act::FocusGroupName => self.focus = Focus::GroupName,
+            Act::StatsStyle(graphs) => {
+                self.cfg.stats_style = if graphs { "graphs" } else { "rings" }.into();
+                self.dirty = true;
+            }
             Act::EditClocks => {
                 self.search.clear();
                 self.results.clear();
@@ -1822,43 +1872,11 @@ impl App {
                 78.0
             }
             Widget::Gauges => {
-                let s = self.stats;
-                let pct = |v: f32| format!("{:.0}%", v * 100.0);
-                // (label, fraction of the ring, colour, text in the middle)
-                let items: Vec<(&str, Option<f32>, Color, String)> = self
-                    .cfg
-                    .gauges
-                    .iter()
-                    .filter_map(|k| match k.as_str() {
-                        "cpu" => Some(("CPU", Some(s.cpu), t.accent, pct(s.cpu))),
-                        "mem" => Some(("MEM", Some(s.mem), Color::rgb(0x4fd1c5), pct(s.mem))),
-                        "gpu" => Some(("GPU", s.gpu, t.accent, s.gpu.map(pct).unwrap_or_else(|| "–".into()))),
-                        "disk" => Some(("C:", Some(s.disk), Color::rgb(0x9ad17a), pct(s.disk))),
-                        "net" => Some((
-                            "NET ↓",
-                            s.net_down.map(|_| s.net_frac),
-                            Color::rgb(0xa78bfa),
-                            s.net_down.map(sysinfo::fmt_rate).unwrap_or_else(|| "–".into()),
-                        )),
-                        _ => None,
-                    })
-                    .collect();
-                if items.is_empty() {
-                    return 0.0;
+                if self.cfg.stats_style == "rings" {
+                    self.draw_rings(g, x, y, width)
+                } else {
+                    self.draw_graphs(g, x, y, width)
                 }
-                let cell = width / items.len() as f32;
-                for (i, (label, v, color, txt)) in items.into_iter().enumerate() {
-                    let cx = x + cell * (i as f32 + 0.5);
-                    let cy = y + 32.0;
-                    g.stroke_circle(cx, cy, 28.0, t.faint, 4.0);
-                    if let Some(v) = v {
-                        let hot = v > 0.9 && label != "NET ↓";
-                        g.arc(cx, cy, 28.0, v, if hot { Color::rgb(0xff7a59) } else { color }, 4.0);
-                    }
-                    g.text(&txt, Rect::new(cx - 28.0, cy - 14.0, 56.0, 28.0), ts(15.5).semi().center(), t.fg);
-                    g.text(label, Rect::new(cx - 40.0, y + 66.0, 80.0, 18.0), ts(11.0).bold().center(), t.dim);
-                }
-                86.0
             }
             Widget::WorldClocks => {
                 let clocks = self.cfg.world_clocks.clone();
@@ -2242,6 +2260,146 @@ impl App {
                 yy - y - 2.0
             }
         }
+    }
+
+    /// Temperature text, coloured by how hot it is.
+    fn temp_text(&self, t: Option<f32>) -> Option<(String, Color)> {
+        let t = t?;
+        let col = if t >= 85.0 {
+            Color::rgb(0xff6b5b)
+        } else if t >= 70.0 {
+            Color::rgb(0xf2c14e)
+        } else {
+            self.theme.dim
+        };
+        Some((format!("{t:.0}°C"), col))
+    }
+
+    /// (key, label, fraction, value text, detail text, detail colour, line colour)
+    fn stat_items(&self) -> Vec<(&'static str, &'static str, Option<f32>, String, String, Color, Color)> {
+        let s = self.stats;
+        let t = self.theme;
+        let pct = |v: f32| format!("{:.0}%", v * 100.0);
+        let rate = |v: Option<f32>| v.map(|v| format!("{}/s", sysinfo::fmt_rate(v))).unwrap_or_else(|| "–".into());
+        let gb = |v: f32| if v >= 10.0 { format!("{v:.0}") } else { format!("{v:.1}") };
+        let mut out = Vec::new();
+        for k in &self.cfg.gauges {
+            let item = match k.as_str() {
+                "cpu" => {
+                    let (tt, tc) = self.temp_text(self.stats.cpu_temp).unwrap_or_default_pair(t.dim);
+                    ("cpu", "CPU", Some(s.cpu), pct(s.cpu), tt, tc, t.accent)
+                }
+                "gpu" => {
+                    let (tt, tc) = self.temp_text(self.stats.gpu_temp).unwrap_or_default_pair(t.dim);
+                    ("gpu", "GPU", s.gpu, s.gpu.map(pct).unwrap_or_else(|| "–".into()), tt, tc, Color::rgb(0x34c38f))
+                }
+                "mem" => (
+                    "mem",
+                    "Memory",
+                    Some(s.mem),
+                    pct(s.mem),
+                    format!("{} / {} GB", gb(s.mem_used_gb), gb(s.mem_total_gb)),
+                    t.dim,
+                    Color::rgb(0x4fd1c5),
+                ),
+                "vram" => {
+                    let frac = s.vram_used.filter(|_| s.vram_total > 0.0).map(|u| u / s.vram_total);
+                    (
+                        "vram",
+                        "VRAM",
+                        frac,
+                        frac.map(pct).unwrap_or_else(|| "–".into()),
+                        s.vram_used.map(|u| format!("{} / {} GB", gb(u), gb(s.vram_total))).unwrap_or_default(),
+                        t.dim,
+                        Color::rgb(0xf2994a),
+                    )
+                }
+                "net" => (
+                    "net",
+                    "Network",
+                    s.net_down.map(|_| s.net_frac),
+                    format!("↓ {}", rate(s.net_down)),
+                    format!("↑ {}", rate(s.net_up)),
+                    t.dim,
+                    Color::rgb(0xa78bfa),
+                ),
+                "disk" => ("disk", "C:", Some(s.disk), pct(s.disk), String::new(), t.dim, Color::rgb(0x9ad17a)),
+                _ => continue,
+            };
+            out.push(item);
+        }
+        out
+    }
+
+    /// Live line graphs of the last minute, two per row.
+    fn draw_graphs(&mut self, g: &mut Gfx, x: f32, y: f32, width: f32) -> f32 {
+        let t = self.theme;
+        let items = self.stat_items();
+        if items.is_empty() {
+            return 0.0;
+        }
+        let cols = if width >= 300.0 { 2 } else { 1 };
+        let gap = 10.0;
+        let cw = (width - gap * (cols as f32 - 1.0)) / cols as f32;
+        let ch = 84.0;
+        for (i, (key, label, frac, value, detail, dcol, col)) in items.iter().enumerate() {
+            let r = Rect::new(x + (i % cols) as f32 * (cw + gap), y + (i / cols) as f32 * (ch + gap), cw, ch);
+            g.fill_rr(r, 10.0, t.card.a(0.06));
+            g.text(label, Rect::new(r.x + 12.0, r.y + 8.0, r.w * 0.5, 18.0), ts(11.5).bold(), t.dim);
+            g.text(value, Rect::new(r.x + r.w * 0.35, r.y + 6.0, r.w * 0.65 - 12.0, 22.0), ts(15.0).semi().right(), t.fg);
+            if !detail.is_empty() {
+                g.text(detail, Rect::new(r.x + 12.0, r.y + 26.0, r.w - 24.0, 16.0), ts(11.5).right(), *dcol);
+            }
+            // Chart area along the bottom of the card.
+            let a = Rect::new(r.x + 10.0, r.y + 46.0, r.w - 20.0, r.h - 54.0);
+            g.line(a.x, a.bottom(), a.right(), a.bottom(), t.card.a(0.10), 1.0);
+            let data: Vec<f32> = self.hist.get(key).map(|q| q.iter().copied().collect()).unwrap_or_default();
+            if data.len() >= 2 && frac.is_some() {
+                let step = a.w / 59.0;
+                let x0 = a.right() - (data.len() - 1) as f32 * step;
+                let pts: Vec<(f32, f32)> =
+                    data.iter().enumerate().map(|(k, v)| (x0 + k as f32 * step, a.bottom() - v * a.h)).collect();
+                let mut area = pts.clone();
+                area.push((a.right(), a.bottom()));
+                area.push((x0, a.bottom()));
+                g.fill_poly(&area, col.a(0.22));
+                g.polyline(&pts, *col, 1.6);
+                let last = pts[pts.len() - 1];
+                g.fill_circle(last.0, last.1, 2.6, *col);
+            }
+        }
+        let rows = items.len().div_ceil(cols);
+        rows as f32 * (ch + gap) - gap
+    }
+
+    /// Ring gauges (the original look).
+    fn draw_rings(&mut self, g: &mut Gfx, x: f32, y: f32, width: f32) -> f32 {
+        let t = self.theme;
+        let items = self.stat_items();
+        if items.is_empty() {
+            return 0.0;
+        }
+        let cell = width / items.len() as f32;
+        let r = (cell / 2.0 - 10.0).clamp(18.0, 28.0);
+        for (i, (key, label, frac, value, detail, dcol, col)) in items.into_iter().enumerate() {
+            let cx = x + cell * (i as f32 + 0.5);
+            let cy = y + 32.0;
+            g.stroke_circle(cx, cy, r, t.faint, 4.0);
+            if let Some(v) = frac {
+                let hot = v > 0.9 && key != "net";
+                g.arc(cx, cy, r, v, if hot { Color::rgb(0xff7a59) } else { col }, 4.0);
+            }
+            let short = if key == "net" { value.trim_start_matches("↓ ").trim_end_matches("/s").to_string() } else { value };
+            let size = if r < 24.0 { 12.5 } else { 15.0 };
+            g.text(&short, Rect::new(cx - r, cy - 14.0, 2.0 * r, 28.0), ts(size).semi().center(), t.fg);
+            let lab = if key == "net" { "NET ↓".to_string() } else { label.to_uppercase() };
+            g.text(&lab, Rect::new(cx - cell / 2.0, y + 66.0, cell, 18.0), ts(11.0).bold().center(), t.dim);
+            if detail.ends_with("°C") {
+                g.text(&detail, Rect::new(cx - cell / 2.0, y + 83.0, cell, 16.0), ts(11.0).center(), dcol);
+            }
+        }
+        let temps = self.stats.cpu_temp.is_some() || self.stats.gpu_temp.is_some();
+        if temps { 100.0 } else { 86.0 }
     }
 
     fn draw_results(&mut self, g: &mut Gfx, c: Rect) -> f32 {
@@ -2638,6 +2796,20 @@ impl App {
             g.text(&txt, Rect::new(track.right() + 16.0, y, 60.0, 36.0), ts(13.0), t.dim);
             y += row;
         }
+
+        lab(g, "System stats", y);
+        let graphs = self.cfg.stats_style != "rings";
+        let nx = self.pills(g, cx, y, vec![
+            ("Graphs", Act::StatsStyle(true), graphs),
+            ("Rings", Act::StatsStyle(false), !graphs),
+        ]);
+        let note = if self.stats.cpu_temp.is_some() {
+            "CPU temperature from LibreHardwareMonitor"
+        } else {
+            "CPU temperature needs LibreHardwareMonitor running"
+        };
+        g.text(note, Rect::new(nx + 6.0, y, c.right() - nx - 6.0, 36.0), ts(12.0), t.dim);
+        y += row;
 
         lab(g, "World clocks", y);
         let names: Vec<String> = self.cfg.world_clocks.iter().map(|c| c.label.clone()).collect();

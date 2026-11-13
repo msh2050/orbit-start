@@ -30,6 +30,12 @@ pub struct Stats {
     pub net_frac: f32,
     /// Upload speed in bytes per second.
     pub net_up: Option<f32>,
+    /// Video memory in use and in total, in GB.
+    pub vram_used: Option<f32>,
+    pub vram_total: f32,
+    /// Temperatures in °C.
+    pub cpu_temp: Option<f32>,
+    pub gpu_temp: Option<f32>,
 }
 
 #[derive(Clone)]
@@ -152,6 +158,9 @@ pub struct Sampler {
     net_tried: bool,
     net_peak: f32,
     net_up: Option<Counter>,
+    gpu_dev: Option<crate::sensors::Gpu>,
+    gpu_dev_tried: bool,
+    lhm: crate::sensors::Lhm,
 }
 
 fn ft(f: FILETIME) -> u64 {
@@ -160,10 +169,40 @@ fn ft(f: FILETIME) -> u64 {
 
 impl Sampler {
     pub fn new() -> Self {
-        Sampler { prev_idle: 0, prev_total: 0, gpu: None, gpu_tried: false, net: None, net_tried: false, net_peak: 0.0, net_up: None }
+        Sampler {
+            prev_idle: 0,
+            prev_total: 0,
+            gpu: None,
+            gpu_tried: false,
+            net: None,
+            net_tried: false,
+            net_peak: 0.0,
+            net_up: None,
+            gpu_dev: None,
+            gpu_dev_tried: false,
+            lhm: crate::sensors::Lhm::new(),
+        }
     }
 
-    pub fn sample(&mut self, want_gpu: bool, want_net: bool) -> Stats {
+/// Video memory and temperatures (read only while the stats are on screen).
+    fn extra(&mut self, s: &mut Stats) {
+        if !self.gpu_dev_tried {
+            self.gpu_dev_tried = true;
+            self.gpu_dev = crate::sensors::Gpu::open();
+        }
+        if let Some(g) = &self.gpu_dev {
+            s.vram_total = g.vram_total as f32 / 1073741824.0;
+            s.vram_used = g.vram_used().map(|b| b as f32 / 1073741824.0);
+            s.gpu_temp = g.temperature();
+        }
+        let (cpu, gpu) = self.lhm.read();
+        s.cpu_temp = cpu;
+        if s.gpu_temp.is_none() {
+            s.gpu_temp = gpu;
+        }
+    }
+
+    pub fn sample(&mut self, want_gpu: bool, want_net: bool, want_extra: bool) -> Stats {
         let mut s = Stats::default();
         unsafe {
             let (mut idle, mut kernel, mut user) = (FILETIME::default(), FILETIME::default(), FILETIME::default());
@@ -217,6 +256,9 @@ impl Sampler {
                     }
                 }
             }
+        }
+        if want_extra {
+            self.extra(&mut s);
         }
         s
     }

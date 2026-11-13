@@ -7,6 +7,7 @@ mod calc;
 mod config;
 mod gfx;
 mod news;
+mod sensors;
 mod sysinfo;
 mod taskbar;
 mod text;

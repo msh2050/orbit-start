@@ -62,6 +62,8 @@ features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Accessibility",
     "Win32_System_Variant",
+    "Win32_System_Wmi",
+    "Wdk_Graphics_Direct3D",
 ]
 
 [profile.release]

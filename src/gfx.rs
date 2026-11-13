@@ -392,6 +392,37 @@ impl Gfx {
         unsafe { self.dc.DrawLine(v2(x0, y0), v2(x1, y1), &self.brush, width, &self.cap) }
     }
 
+    fn path(&mut self, pts: &[(f32, f32)], closed: bool) -> Option<ID2D1PathGeometry1> {
+        if pts.len() < 2 {
+            return None;
+        }
+        unsafe {
+            let geo = self.factory.CreatePathGeometry().ok()?;
+            let sink = geo.Open().ok()?;
+            let begin = if closed { D2D1_FIGURE_BEGIN_FILLED } else { D2D1_FIGURE_BEGIN_HOLLOW };
+            sink.BeginFigure(v2(pts[0].0, pts[0].1), begin);
+            let rest: Vec<Vector2> = pts[1..].iter().map(|p| v2(p.0, p.1)).collect();
+            sink.AddLines(&rest);
+            sink.EndFigure(if closed { D2D1_FIGURE_END_CLOSED } else { D2D1_FIGURE_END_OPEN });
+            sink.Close().ok()?;
+            Some(geo)
+        }
+    }
+
+    /// Filled polygon.
+    pub fn fill_poly(&mut self, pts: &[(f32, f32)], c: Color) {
+        let Some(geo) = self.path(pts, true) else { return };
+        self.set(c);
+        unsafe { self.dc.FillGeometry(&geo, &self.brush, None::<&ID2D1Brush>) }
+    }
+
+    /// Open line through the points, with round joins.
+    pub fn polyline(&mut self, pts: &[(f32, f32)], c: Color, width: f32) {
+        let Some(geo) = self.path(pts, false) else { return };
+        self.set(c);
+        unsafe { self.dc.DrawGeometry(&geo, &self.brush, width, &self.cap) }
+    }
+
     /// Arc starting at 12 o'clock, sweeping clockwise through `frac` of a turn.
     pub fn arc(&mut self, cx: f32, cy: f32, r: f32, frac: f32, c: Color, width: f32) {
         let frac = frac.clamp(0.0, 1.0);

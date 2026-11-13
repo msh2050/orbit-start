@@ -224,6 +224,8 @@ pub struct Config {
     pub autostart: bool,
     /// Show network speed, CPU, memory and folder buttons in the taskbar's free space.
     pub taskbar_info: bool,
+    /// How the system stats widget looks: "graphs" or "rings".
+    pub stats_style: String,
     pub workspaces: Vec<Workspace>,
     /// How many times each app was opened from this menu.
     pub launches: std::collections::BTreeMap<String, u32>,
@@ -257,11 +259,12 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            version: 3,
+            version: 4,
             taskbar_style: TaskbarStyle::Default,
             hook_start_button: true,
             autostart: false,
             taskbar_info: true,
+            stats_style: "graphs".into(),
             workspaces: Vec::new(),
             launches: Default::default(),
             run_history: Vec::new(),
@@ -283,7 +286,7 @@ impl Default for Config {
                 Page { widgets: vec![Widget::WorldClocks, Widget::Calendar, Widget::Notes] },
                 Page { widgets: vec![Widget::Calculator, Widget::Recent, Widget::OpenWindows, Widget::Closed] },
             ],
-            gauges: vec!["cpu".into(), "mem".into(), "gpu".into(), "net".into()],
+            gauges: vec!["cpu".into(), "gpu".into(), "mem".into(), "vram".into(), "net".into()],
             world_clocks: vec![
                 WorldClock { label: "Local".into(), tz: String::new() },
                 WorldClock { label: "London".into(), tz: "GMT Standard Time".into() },
@@ -376,6 +379,13 @@ impl Config {
                 c.gauges = Config::default().gauges;
             }
             c.version = 3;
+        }
+        if c.version < 4 {
+            // Video memory joined the stats; add it to the stock gauge list.
+            if c.gauges == ["cpu", "mem", "gpu", "net"] {
+                c.gauges = Config::default().gauges;
+            }
+            c.version = 4;
         }
         c.sanitize();
         c

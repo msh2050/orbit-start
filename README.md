@@ -43,7 +43,7 @@ no UI framework, so it stays small: about **35 MB of memory while closed**
 | | |
 | --- | --- |
 | Clock and date | Analogue **world clocks**: click them to pick from 80 cities |
-| **CPU, memory, GPU, network** gauges | **Drives**: one bar per drive; hover for used / total, click to open |
+| **Live graphs** of CPU, GPU, memory, **VRAM** and network for the last minute, with **CPU / GPU temperature** (or ring gauges) | **Drives**: one bar per drive; hover for used / total, click to open |
 | Month **calendar** | **Notes** (saved automatically) |
 | **Calculator** | **Run** box with history (↑ / ↓) |
 | **Pinned apps** | **App groups** with tabs (see below) |
@@ -135,12 +135,23 @@ Everything in the Customize screen is saved to
 | Key | Meaning |
 | --- | --- |
 | `news_url`, `news_title` | Any RSS or Atom feed |
-| `gauges` | Any of `cpu`, `mem`, `gpu`, `net`, `disk` |
+| `gauges` | Any of `cpu`, `gpu`, `mem`, `vram`, `net`, `disk` |
 | `web_search` | Search address; `{}` is replaced by the query |
 | `renderer` | `software` (default, lowest memory) or `gpu` |
 
 `log.txt` in the same folder records each start, which helps to check that
 Windows launched it at sign-in.
+
+## Temperatures
+
+- **GPU temperature** and **VRAM** come from Windows itself (the same data
+  Task Manager shows), for NVIDIA, AMD and Intel cards with a recent driver.
+- **CPU temperature** has no reliable source in Windows: the built-in ACPI
+  value is usually a fixed number, and reading the real sensor needs a kernel
+  driver. Orbit Start does not install one. Instead, if the free, open-source
+  [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)
+  is running (as administrator), Orbit Start reads the CPU package temperature
+  from it automatically.
 
 ## Privacy
 
@@ -225,6 +236,7 @@ Stardock; Start11 was an inspiration for the feature set.
   العمليات الحسابية، وتشغيل أوامر بكتابة `>`.
 - **شريط المهام**: تفتح من زر ويندوز و Ctrl+Esc وزر ابدأ، شكل مستدير أو جزر،
   وجزر صغيرة تعرض سرعة التنزيل والرفع والمعالج والذاكرة وأزرار المجلدات.
+- **رسوم بيانية حية** للمعالج وكرت الشاشة والذاكرة و **ذاكرة كرت الشاشة (VRAM)** والشبكة، مع **حرارة كرت الشاشة**. حرارة المعالج تحتاج تشغيل برنامج LibreHardwareMonitor المجاني.
 - **الساعات العالمية**: اضغط على الساعات لاختيار المدن (80 مدينة منها كندا والدول العربية)، أو من Customize ← World clocks.
 - استهلاك منخفض: نحو 35 ميغابايت وهي مغلقة، وبدون أي استهلاك للمعالج.
 - خصوصية: لا تتبع ولا حساب. البيانات تبقى في `%USERPROFILE%\.orbit-start`.
