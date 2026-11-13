@@ -1067,10 +1067,7 @@ unsafe fn island_tick() {
     let mut tb = RECT::default();
     let _ = GetWindowRect(tray, &mut tb);
     let k = GetDpiForWindow(tray).max(96) as f32 / 96.0;
-    let busy = matches!(
-        SHQueryUserNotificationState(),
-        Ok(QUNS_BUSY) | Ok(QUNS_RUNNING_D3D_FULL_SCREEN) | Ok(QUNS_PRESENTATION_MODE)
-    );
+    let busy = fullscreen_app(tray);
     let place = with(|s| {
         let on = s.app.cfg.taskbar_info;
         let Some((ih, ig)) = s.island.as_mut() else { return None };
@@ -1079,7 +1076,14 @@ unsafe fn island_tick() {
         let (w, h) = ((total * k).round() as i32, tb.bottom - tb.top - 2 * m);
         let x = tb.left + m + (6.0 * k) as i32;
         let fits = (x + w + (16.0 * k) as i32) < taskbar::leftmost() && h > 10 && IsWindowVisible(tray).as_bool();
-        s.island_live = on && fits && !busy;
+        let live = on && fits && !busy;
+        if live != s.island_live {
+            log(&format!(
+                "island {} (enabled={on} fits={fits} fullscreen={busy})",
+                if live { "shown" } else { "hidden" }
+            ));
+        }
+        s.island_live = live;
         s.app.island_on = s.island_live;
         if !s.island_live {
             return Some((*ih, None));
@@ -1100,6 +1104,35 @@ unsafe fn island_tick() {
         }
         None => {}
     }
+}
+
+/// True when the window in front really covers the whole taskbar monitor
+/// (a game, a video, a slideshow). Windows' own "busy" state is not used: it
+/// also reports ordinary maximized windows on some setups.
+unsafe fn fullscreen_app(tray: HWND) -> bool {
+    let fg = GetForegroundWindow();
+    if fg.is_invalid() || fg == tray {
+        return false;
+    }
+    let mut cls = [0u16; 64];
+    let n = GetClassNameW(fg, &mut cls);
+    let class = String::from_utf16_lossy(&cls[..n.max(0) as usize]);
+    if matches!(class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd")
+        || class.starts_with("OrbitStart")
+    {
+        return false;
+    }
+    let mon = MonitorFromWindow(fg, MONITOR_DEFAULTTONULL);
+    if mon.is_invalid() || mon != MonitorFromWindow(tray, MONITOR_DEFAULTTONEAREST) {
+        return false;
+    }
+    let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+    let mut r = RECT::default();
+    if !GetMonitorInfoW(mon, &mut mi).as_bool() || GetWindowRect(fg, &mut r).is_err() {
+        return false;
+    }
+    let m = mi.rcMonitor;
+    r.left <= m.left && r.top <= m.top && r.right >= m.right && r.bottom >= m.bottom
 }
 
 unsafe extern "system" fn island_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
