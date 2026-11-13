@@ -18,6 +18,8 @@ pub struct AppEntry {
     pub lname: String,
     /// Shell parsing name, e.g. `shell:AppsFolder\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App`.
     pub id: String,
+    /// Publisher from the app's uninstall record, when one matches by name.
+    pub publisher: String,
 }
 
 #[derive(Clone)]
@@ -81,12 +83,83 @@ pub fn index_apps() -> Vec<AppEntry> {
             if junk {
                 continue;
             }
-            out.push(AppEntry { name, lname, id: format!("shell:AppsFolder\\{rel}") });
+            out.push(AppEntry { name, lname, id: format!("shell:AppsFolder\\{rel}"), publisher: String::new() });
         }
     }
     out.sort_by(|a, b| a.lname.cmp(&b.lname));
     out.dedup_by(|a, b| a.id == b.id);
+    let pubs = publishers();
+    for a in &mut out {
+        // Uninstall names often add a version: "Foo 2.1" belongs to app "Foo".
+        if let Some((_, p)) = pubs.iter().find(|(n, _)| *n == a.lname || n.starts_with(&format!("{} ", a.lname))) {
+            a.publisher = p.clone();
+        }
+    }
     out
+}
+
+/// (lowercase display name, publisher) of installed programs, from the
+/// uninstall records Windows keeps for Settings > Installed apps.
+fn publishers() -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let roots = [
+        (HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall"),
+        (HKEY_LOCAL_MACHINE, "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall"),
+        (HKEY_LOCAL_MACHINE, "Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall"),
+    ];
+    let read = |key: HKEY, name: &str| -> Option<String> {
+        let mut buf = [0u16; 260];
+        let mut size = (buf.len() * 2) as u32;
+        let r = unsafe {
+            RegGetValueW(key, None, &HSTRING::from(name), RRF_RT_REG_SZ, None, Some(buf.as_mut_ptr() as *mut _), Some(&mut size))
+        };
+        if r != ERROR_SUCCESS {
+            return None;
+        }
+        let len = buf.iter().position(|&c| c == 0).unwrap_or(0);
+        Some(String::from_utf16_lossy(&buf[..len]).trim().to_string()).filter(|s| !s.is_empty())
+    };
+    for (root, path) in roots {
+        unsafe {
+            let mut key = HKEY::default();
+            if RegOpenKeyExW(root, &HSTRING::from(path), None, KEY_READ, &mut key) != ERROR_SUCCESS {
+                continue;
+            }
+            for i in 0..4000u32 {
+                let mut name = [0u16; 256];
+                let mut len = name.len() as u32;
+                let r = RegEnumKeyExW(key, i, Some(PWSTR(name.as_mut_ptr())), &mut len, None, None, None, None);
+                if r != ERROR_SUCCESS {
+                    break;
+                }
+                let mut sub = HKEY::default();
+                if RegOpenKeyExW(key, PCWSTR(name.as_ptr()), None, KEY_READ, &mut sub) == ERROR_SUCCESS {
+                    if let (Some(n), Some(p)) = (read(sub, "DisplayName"), read(sub, "Publisher")) {
+                        out.push((n.to_lowercase(), p));
+                    }
+                    let _ = RegCloseKey(sub);
+                }
+            }
+            let _ = RegCloseKey(key);
+        }
+    }
+    out
+}
+
+/// Short group name for a publisher: "Learning Machines LLC" -> "Learning Machines".
+pub fn short_publisher(p: &str) -> String {
+    let mut s = p.trim().trim_end_matches('.').to_string();
+    for suffix in [", Inc", " Inc", " LLC", " Ltd", " Limited", " Corporation", " Corp", " GmbH", " Co", ","] {
+        if s.to_lowercase().ends_with(&suffix.to_lowercase()) {
+            s.truncate(s.len() - suffix.len());
+            s = s.trim().trim_end_matches(',').to_string();
+        }
+    }
+    if s.is_empty() {
+        p.to_string()
+    } else {
+        s
+    }
 }
 
 fn known_folder(id: &GUID) -> Option<PathBuf> {
@@ -442,6 +515,9 @@ mod tests {
         assert_eq!(category("visual studio code"), Some("Development"));
         assert_eq!(category("microsoft edge"), Some("Internet"));
         assert_eq!(category("barcode reader"), None);
+        assert_eq!(short_publisher("Learning Machines LLC"), "Learning Machines");
+        assert_eq!(short_publisher("Microsoft Corporation"), "Microsoft");
+        assert_eq!(short_publisher("Foo, Inc."), "Foo");
         assert!(score("services", "vis").is_none());
         assert!(score("voice access", "vis").is_none());
         assert!(score("calculator", "calc") > score("local calc tool", "calc"));

@@ -58,6 +58,10 @@ no UI framework, so it stays small: about **35 MB of memory while closed**
 - **Your own groups**: press **+**, type a name, tick the apps. Each group gets
   *Choose apps*, *Rename* and *Open all*. Right-click any app for
   *Add to …* / *Remove from …*.
+- **Automatic groups by publisher**: right-click an app and choose
+  *New group: all apps by …*. Every app from that publisher joins the group,
+  including apps installed later (the app list is re-read every two minutes).
+- **Boxes**: the *My groups* widget shows each of your groups as its own box.
 
 ### Search
 - Apps (ranked by how much you use them), **30 Windows Settings pages**, files

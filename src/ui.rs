@@ -199,6 +199,7 @@ pub enum Act {
     PickToggle(String),
     FocusGroupName,
     EditClocks,
+    BoxTitle(usize),
     StatsStyle(bool),
     ClockAdd(usize),
     ClockDel(usize),
@@ -222,6 +223,7 @@ pub enum Pending {
     HookChanged,
     FetchNews,
     RefreshFiles,
+    RefreshApps,
     ContextWorkspace(usize),
     Activate(isize),
     TaskbarChanged,
@@ -322,6 +324,7 @@ pub struct App {
     /// Usage score per app, from Windows' own Start menu statistics.
     usage: HashMap<String, f32>,
     usage_at: Option<Instant>,
+    apps_at: Option<Instant>,
     drives: Vec<sysinfo::Drive>,
     downloads: Vec<FileEntry>,
     /// Scroll position of the app list pane in the Apps style.
@@ -417,6 +420,7 @@ impl App {
             group_tab: 0,
             usage: HashMap::new(),
             usage_at: None,
+            apps_at: None,
             drives: Vec::new(),
             downloads: Vec::new(),
             scroll2: 0.0,
@@ -487,7 +491,18 @@ impl App {
             }
         }
         for (i, w) in self.cfg.workspaces.iter().enumerate() {
-            groups.push(Group { name: w.name.clone(), apps: w.apps.clone(), ws: Some(i) });
+            let mut ids: Vec<String> = Vec::new();
+            if !w.publisher.is_empty() {
+                ids.extend(
+                    self.apps.iter().filter(|a| a.publisher.eq_ignore_ascii_case(&w.publisher)).map(|a| a.id.clone()),
+                );
+            }
+            for id in &w.apps {
+                if !ids.contains(id) {
+                    ids.push(id.clone());
+                }
+            }
+            groups.push(Group { name: w.name.clone(), apps: ids, ws: Some(i) });
         }
         self.group_tab = self.group_tab.min(groups.len().saturating_sub(1));
         self.groups = groups;
@@ -591,6 +606,28 @@ impl App {
         self.rebuild_groups();
     }
 
+    pub fn publisher_of(&self, id: &str) -> Option<String> {
+        self.apps.iter().find(|a| a.id == id).map(|a| a.publisher.clone()).filter(|p| !p.is_empty())
+    }
+
+    pub fn has_publisher_group(&self, publisher: &str) -> bool {
+        self.cfg.workspaces.iter().any(|w| w.publisher.eq_ignore_ascii_case(publisher))
+    }
+
+    /// Adds an automatic group holding every app from `publisher`.
+    pub fn add_publisher_group(&mut self, publisher: &str) {
+        if self.cfg.workspaces.len() >= 8 || self.has_publisher_group(publisher) {
+            return;
+        }
+        self.cfg.workspaces.push(Workspace {
+            name: apps::short_publisher(publisher),
+            publisher: publisher.to_string(),
+            ..Default::default()
+        });
+        self.dirty = true;
+        self.rebuild_groups();
+    }
+
     pub fn workspace_names(&self) -> Vec<String> {
         self.cfg.workspaces.iter().map(|w| w.name.clone()).collect()
     }
@@ -604,7 +641,7 @@ impl App {
                     return;
                 }
                 let name = format!("Group {}", self.cfg.workspaces.len() + 1);
-                self.cfg.workspaces.push(Workspace { name, apps: Vec::new() });
+                self.cfg.workspaces.push(Workspace { name, ..Default::default() });
                 self.cfg.workspaces.len() - 1
             }
         };
@@ -717,6 +754,11 @@ impl App {
             self.files_at = Some(Instant::now());
             self.pending.push(Pending::RefreshFiles);
         }
+        // Pick up apps installed or removed since the last look.
+        if !self.apps.is_empty() && stale(self.apps_at, 120) {
+            self.apps_at = Some(Instant::now());
+            self.pending.push(Pending::RefreshApps);
+        }
     }
 
     pub fn on_hide(&mut self) {
@@ -784,6 +826,7 @@ impl App {
     }
 
     pub fn set_apps(&mut self, mut apps: Vec<AppEntry>) {
+        self.apps_at = Some(Instant::now());
         if self.demo {
             apps.retain(|a| DEMO_APPS.iter().any(|d| a.name.eq_ignore_ascii_case(d)));
             // Pretend usage, so the Suggested tab looks lived in.
@@ -798,7 +841,7 @@ impl App {
                 .filter_map(|n| apps.iter().find(|a| a.name.eq_ignore_ascii_case(n)).map(|a| a.id.clone()))
                 .take(4)
                 .collect();
-            self.cfg.workspaces = vec![Workspace { name: "Work".into(), apps: work }];
+            self.cfg.workspaces = vec![Workspace { name: "Work".into(), apps: work, ..Default::default() }];
         }
         self.apps = apps;
         if !self.cfg.pinned_initialized && !self.apps.is_empty() {
@@ -1080,7 +1123,7 @@ impl App {
                 }
             }
             Some(Act::App(id)) => self.pending.push(Pending::ContextApp(id)),
-            Some(Act::Workspace(i)) => self.pending.push(Pending::ContextWorkspace(i)),
+            Some(Act::Workspace(i)) | Some(Act::BoxTitle(i)) => self.pending.push(Pending::ContextWorkspace(i)),
             _ => {}
         }
     }
@@ -1282,7 +1325,7 @@ impl App {
             Act::GroupNew => {
                 if self.cfg.workspaces.len() < 8 {
                     let name = format!("Group {}", self.cfg.workspaces.len() + 1);
-                    self.cfg.workspaces.push(Workspace { name, apps: Vec::new() });
+                    self.cfg.workspaces.push(Workspace { name, ..Default::default() });
                     self.dirty = true;
                     self.rebuild_groups();
                     let idx = self.cfg.workspaces.len() - 1;
@@ -1319,6 +1362,7 @@ impl App {
                 self.cfg.stats_style = if graphs { "graphs" } else { "rings" }.into();
                 self.dirty = true;
             }
+            Act::BoxTitle(i) => self.edit_group(i, false),
             Act::EditClocks => {
                 self.search.clear();
                 self.results.clear();
@@ -2229,6 +2273,49 @@ impl App {
                 g.text("Enter to run   ·   ↑↓ history", Rect::new(x, r.bottom() + 6.0, width, 18.0), ts(11.5), t.dim.a(0.8));
                 22.0 + 38.0 + 26.0
             }
+            Widget::Boxes => {
+                let boxes: Vec<Group> = self.groups.iter().filter(|g| g.ws.is_some()).cloned().collect();
+                if boxes.is_empty() {
+                    g.text(
+                        "Your groups appear here as boxes. Create one with + in App groups.",
+                        Rect::new(x, y, width, 40.0),
+                        ts(13.0).wrap(),
+                        t.dim.a(0.8),
+                    );
+                    return 40.0;
+                }
+                let cols = if width < 360.0 { 3usize } else { 4 };
+                let icon = self.cfg.icon_size;
+                let cw = (width - 16.0) / cols as f32;
+                let ch = icon + 44.0;
+                let mut yy = y;
+                for gr in boxes {
+                    let wi = gr.ws.unwrap_or(0);
+                    let auto = self.cfg.workspaces.get(wi).map(|w| !w.publisher.is_empty()).unwrap_or(false);
+                    let hr = Rect::new(x - 6.0, yy - 2.0, width + 12.0, 26.0);
+                    let hot = self.hit(hr, Act::BoxTitle(wi));
+                    g.text(&gr.name, Rect::new(x, yy, width * 0.6, 22.0), ts(14.0).semi(), if hot { t.accent } else { t.fg });
+                    let note = if auto { format!("{} apps · auto", gr.apps.len()) } else { format!("{} apps", gr.apps.len()) };
+                    g.text(&note, Rect::new(x + width * 0.5, yy, width * 0.5, 22.0), ts(12.0).right(), t.dim);
+                    let rows = gr.apps.len().div_ceil(cols).max(1);
+                    let body = Rect::new(x, yy + 28.0, width, rows as f32 * ch + 12.0);
+                    g.fill_rr(body, 8.0, t.card.a(0.06));
+                    if gr.apps.is_empty() {
+                        g.text("Empty. Click the title to choose apps.", body, ts(13.0).center(), t.dim.a(0.8));
+                    }
+                    for (i, id) in gr.apps.iter().enumerate() {
+                        let name = self.apps.iter().find(|a| a.id == *id).map(|a| a.name.clone()).unwrap_or_default();
+                        let r = Rect::new(x + 8.0 + (i % cols) as f32 * cw, body.y + 6.0 + (i / cols) as f32 * ch, cw, ch - 4.0);
+                        if self.hit(r.inset(2.0), Act::App(id.clone())) {
+                            g.fill_rr(r.inset(2.0), 8.0, t.card.a(0.10));
+                        }
+                        self.draw_icon(g, id, Rect::new(r.x + (cw - icon) / 2.0, r.y + 8.0, icon, icon));
+                        g.text(&name, Rect::new(r.x + 4.0, r.y + icon + 11.0, cw - 8.0, 20.0), ts(12.5).center(), t.fg);
+                    }
+                    yy = body.bottom() + 16.0;
+                }
+                yy - y - 16.0
+            }
             Widget::Workspaces => {
                 self.label(g, "Workspaces", x, y, width);
                 let list = self.cfg.workspaces.clone();
@@ -2602,8 +2689,13 @@ impl App {
         self.hit(nb, Act::FocusGroupName);
         self.draw_field(g, Focus::GroupName, Rect::new(nb.x + 12.0, nb.y, nb.w - 24.0, nb.h), ts(15.0).semi(), "Group name");
         self.pills(g, c.right() - 116.0, y, vec![("Delete group", Act::GroupDelete(wi), false)]);
+        let line = if ws.publisher.is_empty() {
+            format!("{} chosen   ·   tick apps to add them   ·   type above to filter", ws.apps.len())
+        } else {
+            format!("Every app by {} is included automatically   ·   tick others to add them", ws.publisher)
+        };
         g.text(
-            &format!("{} chosen   ·   tick apps to add them   ·   type above to filter", ws.apps.len()),
+            &line,
             Rect::new(c.x, y + 42.0, c.w, 20.0),
             ts(12.5),
             t.dim,

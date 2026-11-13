@@ -651,11 +651,24 @@ unsafe fn run_pending() {
                     if names.len() < 8 {
                         items.push((9, "Add to new group"));
                     }
+                    let publisher = with(|s| s.app.publisher_of(&id)).flatten();
+                    let auto_label = publisher.as_ref().and_then(|p| {
+                        let exists = with(|s| s.app.has_publisher_group(p)).unwrap_or(true);
+                        (!exists && names.len() < 8).then(|| format!("New group: all apps by {p}"))
+                    });
+                    if let Some(l) = &auto_label {
+                        items.push((7, l.as_str()));
+                    }
                     if let Some(l) = &remove_label {
                         items.push((0, ""));
                         items.push((8, l.as_str()));
                     }
                     match popup(&items) {
+                        7 => {
+                            if let Some(p) = &publisher {
+                                with(|s| s.app.add_publisher_group(p));
+                            }
+                        }
                         8 => {
                             if let Some((ws, _)) = &current {
                                 with(|s| s.app.remove_from_workspace(*ws, &id));
@@ -771,6 +784,14 @@ unsafe fn run_pending() {
                             post_box(WM_NEWS_READY, news::fetch(&url));
                         });
                     }
+                }
+                Pending::RefreshApps => {
+                    std::thread::spawn(|| {
+                        unsafe {
+                            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+                        }
+                        post_box(WM_APPS_READY, apps::index_apps());
+                    });
                 }
                 Pending::RefreshFiles => {
                     std::thread::spawn(|| {

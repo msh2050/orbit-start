@@ -63,10 +63,12 @@ pub enum Widget {
     Drives,
     Run,
     Folder,
+    /// Every custom and automatic group as its own box.
+    Boxes,
 }
 
 impl Widget {
-    pub const ALL: [Widget; 16] = [
+    pub const ALL: [Widget; 17] = [
         Widget::Clock,
         Widget::Gauges,
         Widget::WorldClocks,
@@ -83,6 +85,7 @@ impl Widget {
         Widget::Drives,
         Widget::Run,
         Widget::Folder,
+        Widget::Boxes,
     ];
     pub fn label(&self) -> &'static str {
         match self {
@@ -102,6 +105,7 @@ impl Widget {
             Widget::Drives => "Drives",
             Widget::Run => "Run command",
             Widget::Folder => "Downloads folder",
+            Widget::Boxes => "My groups (as boxes)",
         }
     }
 }
@@ -118,11 +122,15 @@ pub struct WorldClock {
     pub tz: String,
 }
 
-/// A named set of apps that launch together.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+/// A named set of apps (a group). With `publisher` set it is an automatic
+/// group: every installed app from that publisher belongs to it, including
+/// apps installed later.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 pub struct Workspace {
     pub name: String,
     pub apps: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub publisher: String,
 }
 
 pub const MAX_CLOCKS: usize = 5;
