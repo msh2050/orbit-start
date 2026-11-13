@@ -1067,7 +1067,8 @@ unsafe fn island_tick() {
     let mut tb = RECT::default();
     let _ = GetWindowRect(tray, &mut tb);
     let k = GetDpiForWindow(tray).max(96) as f32 / 96.0;
-    let busy = fullscreen_app(tray);
+    let full = fullscreen_app(tray);
+    let busy = full.is_some();
     let place = with(|s| {
         let on = s.app.cfg.taskbar_info;
         let Some((ih, ig)) = s.island.as_mut() else { return None };
@@ -1079,8 +1080,9 @@ unsafe fn island_tick() {
         let live = on && fits && !busy;
         if live != s.island_live {
             log(&format!(
-                "island {} (enabled={on} fits={fits} fullscreen={busy})",
-                if live { "shown" } else { "hidden" }
+                "island {} (enabled={on} fits={fits} fullscreen={})",
+                if live { "shown" } else { "hidden" },
+                full.as_deref().unwrap_or("no")
             ));
         }
         s.island_live = live;
@@ -1106,13 +1108,27 @@ unsafe fn island_tick() {
     }
 }
 
-/// True when the window in front really covers the whole taskbar monitor
-/// (a game, a video, a slideshow). Windows' own "busy" state is not used: it
-/// also reports ordinary maximized windows on some setups.
-unsafe fn fullscreen_app(tray: HWND) -> bool {
+/// Programs whose screen-covering windows are overlays (taskbar previews,
+/// flyouts, the touch keyboard, the screen snip), not full-screen content.
+const SHELL_OVERLAYS: [&str; 9] = [
+    "explorer.exe",
+    "shellexperiencehost.exe",
+    "startmenuexperiencehost.exe",
+    "searchhost.exe",
+    "textinputhost.exe",
+    "screenclippinghost.exe",
+    "snippingtool.exe",
+    "lockapp.exe",
+    "orbit-start.exe",
+];
+
+/// When the window in front really covers the whole taskbar monitor (a game,
+/// a video, a slideshow), returns a short description of it for the log.
+/// Windows' own "busy" state is not used: it also reports ordinary windows.
+unsafe fn fullscreen_app(tray: HWND) -> Option<String> {
     let fg = GetForegroundWindow();
     if fg.is_invalid() || fg == tray {
-        return false;
+        return None;
     }
     let mut cls = [0u16; 64];
     let n = GetClassNameW(fg, &mut cls);
@@ -1120,19 +1136,32 @@ unsafe fn fullscreen_app(tray: HWND) -> bool {
     if matches!(class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd")
         || class.starts_with("OrbitStart")
     {
-        return false;
+        return None;
+    }
+    // Tool windows and windows that never take focus are overlays.
+    let ex = GetWindowLongW(fg, GWL_EXSTYLE) as u32;
+    if ex & (WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0) != 0 {
+        return None;
     }
     let mon = MonitorFromWindow(fg, MONITOR_DEFAULTTONULL);
     if mon.is_invalid() || mon != MonitorFromWindow(tray, MONITOR_DEFAULTTONEAREST) {
-        return false;
+        return None;
     }
     let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
     let mut r = RECT::default();
     if !GetMonitorInfoW(mon, &mut mi).as_bool() || GetWindowRect(fg, &mut r).is_err() {
-        return false;
+        return None;
     }
     let m = mi.rcMonitor;
-    r.left <= m.left && r.top <= m.top && r.right >= m.right && r.bottom >= m.bottom
+    if !(r.left <= m.left && r.top <= m.top && r.right >= m.right && r.bottom >= m.bottom) {
+        return None;
+    }
+    let exe = wins::exe_of(fg.0 as isize).unwrap_or_default();
+    let file = wins::file_name(&exe).to_ascii_lowercase();
+    if SHELL_OVERLAYS.contains(&file.as_str()) {
+        return None;
+    }
+    Some(format!("{file} {class}"))
 }
 
 unsafe extern "system" fn island_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
