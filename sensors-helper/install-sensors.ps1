@@ -20,6 +20,15 @@ if (-not $admin) {
     exit
 }
 
+New-Item -ItemType Directory -Force (Join-Path $env:ProgramData "OrbitStart") | Out-Null
+Start-Transcript -Path (Join-Path $env:ProgramData "OrbitStart\install.log") -Force | Out-Null
+trap {
+    Write-Host "Setup failed: $_" -ForegroundColor Red
+    Stop-Transcript | Out-Null
+    Read-Host "Press Enter to close"
+    exit 1
+}
+
 Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue | ForEach-Object {
     Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
@@ -59,4 +68,5 @@ if (Test-Path $file) {
 } else {
     Write-Host "Installed, but no reading yet. Is the PawnIO driver installed?" -ForegroundColor Yellow
 }
+Stop-Transcript | Out-Null
 Start-Sleep 6
